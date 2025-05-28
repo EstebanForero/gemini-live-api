@@ -1,3 +1,5 @@
+#[cfg(feature = "audio-resampling")]
+use super::handle::ActiveResamplerState;
 use super::handle::GeminiLiveClient;
 use super::handlers::{
     EventHandlerSimple, Handlers, ServerContentContext, ToolHandler, UsageMetadataContext,
@@ -5,6 +7,7 @@ use super::handlers::{
 use crate::error::GeminiError;
 use crate::types::*;
 use std::sync::Arc;
+use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::{mpsc, oneshot};
 
 pub struct GeminiLiveClientBuilder<S: Clone + Send + Sync + 'static> {
@@ -12,6 +15,9 @@ pub struct GeminiLiveClientBuilder<S: Clone + Send + Sync + 'static> {
     pub(crate) initial_setup: BidiGenerateContentSetup,
     pub(crate) handlers: Handlers<S>,
     pub(crate) state: S,
+
+    #[cfg(feature = "audio-resampling")]
+    pub(crate) automatic_resampling_enabled: bool,
 }
 
 impl<S: Clone + Send + Sync + 'static + Default> GeminiLiveClientBuilder<S> {
@@ -30,6 +36,8 @@ impl<S: Clone + Send + Sync + 'static> GeminiLiveClientBuilder<S> {
             },
             handlers: Handlers::default(),
             state,
+            #[cfg(feature = "audio-resampling")]
+            automatic_resampling_enabled: false,
         }
     }
 
@@ -93,6 +101,30 @@ impl<S: Clone + Send + Sync + 'static> GeminiLiveClientBuilder<S> {
         self
     }
 
+    /// Enables automatic audio resampling to 16kHz mono if the input audio
+    /// provided to `send_audio_chunk` is not already in that format.
+    ///
+    /// When enabled, the first call to `send_audio_chunk` with a format
+    /// other than 16kHz mono will initialize an internal resampler tailored
+    /// to that specific input audio format. Subsequent calls to `send_audio_chunk`
+    /// for this client instance are expected to use the *same* input audio format.
+    /// If the input audio format changes after the resampler has been initialized,
+    /// an error will be returned (unless future versions offer a re-initialization strategy).
+    ///
+    /// This requires the `audio-resampling` feature to be enabled for the crate.
+    /// (e.g., `gemini-live-api = { version = "...", features = ["audio-resampling"] }`)
+    ///
+    /// If not enabled, or if the `audio-resampling` feature is not compiled,
+    /// audio sent via `send_audio_chunk` **must** already be 16kHz mono PCM.
+    #[cfg(feature = "audio-resampling")]
+    pub fn enable_automatic_resampling(mut self) -> Self {
+        self.automatic_resampling_enabled = true;
+        tracing::info!(
+            "Automatic audio resampling to 16kHz mono has been enabled. Resampler will be initialized on first use if needed."
+        );
+        self
+    }
+
     pub async fn connect(self) -> Result<GeminiLiveClient<S>, GeminiError> {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let (outgoing_sender, outgoing_receiver) = mpsc::channel(100);
@@ -108,11 +140,17 @@ impl<S: Clone + Send + Sync + 'static> GeminiLiveClientBuilder<S> {
             shutdown_rx,
             outgoing_receiver,
         );
+
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
         Ok(GeminiLiveClient {
-            shutdown_tx: Some(shutdown_tx),
+            shutdown_tx: Arc::new(TokioMutex::new(Some(shutdown_tx))), // Wrapped
             outgoing_sender: Some(outgoing_sender),
             state: state_arc,
+            #[cfg(feature = "audio-resampling")]
+            resampler_state: Arc::new(TokioMutex::new(None)),
+            #[cfg(feature = "audio-resampling")]
+            automatic_resampling_configured_in_builder: self.automatic_resampling_enabled,
         })
     }
 }
