@@ -1,5 +1,5 @@
 #[cfg(feature = "audio-resampling")]
-use super::handle::ActiveResamplerState;
+use super::audio_input_pipeline::InputResamplerPipeline;
 use super::handle::GeminiLiveClient;
 use super::handlers::{
     EventHandlerSimple, Handlers, ServerContentContext, ToolHandler, UsageMetadataContext,
@@ -109,25 +109,29 @@ impl<S: Clone + Send + Sync + 'static> GeminiLiveClientBuilder<S> {
     /// to that specific input audio format. Subsequent calls to `send_audio_chunk`
     /// for this client instance are expected to use the *same* input audio format.
     /// If the input audio format changes after the resampler has been initialized,
-    /// an error will be returned (unless future versions offer a re-initialization strategy).
+    /// an error will be returned. Call `send_audio_stream_end()` (which flushes)
+    /// before changing formats if a new stream with a different format is intended.
     ///
     /// This requires the `audio-resampling` feature to be enabled for the crate.
-    /// (e.g., `gemini-live-api = { version = "...", features = ["audio-resampling"] }`)
     ///
     /// If not enabled, or if the `audio-resampling` feature is not compiled,
     /// audio sent via `send_audio_chunk` **must** already be 16kHz mono PCM.
     #[cfg(feature = "audio-resampling")]
     pub fn enable_automatic_resampling(mut self) -> Self {
         self.automatic_resampling_enabled = true;
-        tracing::info!(
-            "Automatic audio resampling to 16kHz mono has been enabled. Resampler will be initialized on first use if needed."
-        );
+        tracing::info!("Automatic audio resampling to 16kHz mono has been enabled.");
         self
     }
 
     pub async fn connect(self) -> Result<GeminiLiveClient<S>, GeminiError> {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let (outgoing_sender, outgoing_receiver) = mpsc::channel(100);
+        // This channel is used by the client handle to send messages TO the WebSocket task
+        let (outgoing_sender_for_websocket_task, outgoing_receiver_for_websocket_task) =
+            mpsc::channel(100);
+
+        // This clone is what the GeminiLiveClient handle will use.
+        // If resampling is enabled, the InputResamplerPipeline will also get a clone of this sender.
+        let client_master_outgoing_sender = outgoing_sender_for_websocket_task.clone();
 
         let state_arc = Arc::new(self.state);
         let handlers_arc = Arc::new(self.handlers);
@@ -138,19 +142,30 @@ impl<S: Clone + Send + Sync + 'static> GeminiLiveClientBuilder<S> {
             handlers_arc,
             state_arc.clone(),
             shutdown_rx,
-            outgoing_receiver,
+            outgoing_receiver_for_websocket_task, // WebSocket task receives on this
         );
 
+        // Brief pause to allow the processing task to potentially start up.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        Ok(GeminiLiveClient {
-            shutdown_tx: Arc::new(TokioMutex::new(Some(shutdown_tx))), // Wrapped
-            outgoing_sender: Some(outgoing_sender),
+        let client = GeminiLiveClient {
+            shutdown_tx: Arc::new(TokioMutex::new(Some(shutdown_tx))),
+            outgoing_sender: Some(client_master_outgoing_sender.clone()), // Client handle uses this for non-pipeline messages
             state: state_arc,
             #[cfg(feature = "audio-resampling")]
-            resampler_state: Arc::new(TokioMutex::new(None)),
+            input_resampler_pipeline: Arc::new(TokioMutex::new(
+                if self.automatic_resampling_enabled {
+                    Some(InputResamplerPipeline::new(
+                        client_master_outgoing_sender, // Pipeline sends its output here
+                    ))
+                } else {
+                    None
+                },
+            )),
             #[cfg(feature = "audio-resampling")]
             automatic_resampling_configured_in_builder: self.automatic_resampling_enabled,
-        })
+        };
+
+        Ok(client)
     }
 }

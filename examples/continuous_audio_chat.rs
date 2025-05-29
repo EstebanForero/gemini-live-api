@@ -7,7 +7,7 @@ use cpal::{
 use crossbeam_channel::{Receiver, Sender, bounded};
 use gemini_live_api::GeminiError;
 use gemini_live_api::{
-    GeminiLiveClient, GeminiLiveClientBuilder,
+    GeminiLiveClientBuilder,
     client::{ServerContentContext, UsageMetadataContext},
     types::*,
 };
@@ -19,13 +19,7 @@ use std::{
 use tokio::sync::{Mutex as TokioMutex, Notify};
 
 // ---- Rubato and AudioAdapter imports for playback resampling ----
-use audioadapter::{
-    // Aliasing to avoid conflict with gemini_live_api::Adapter if it exists
-    Adapter as AudioAdapterTrait,
-    AdapterMut as AudioAdapterMutTrait,
-    SizeError as AudioAdapterSizeError,
-    direct::SequentialSliceOfVecs as RubatoSequentialSlice,
-};
+use audioadapter::direct::SequentialSliceOfVecs as RubatoSequentialSlice;
 use rubato::{Fft as RubatoFftResampler, FixedSync, Indexing as RubatoIndexing, Resampler};
 // ---- End Rubato imports ----
 
@@ -335,7 +329,7 @@ where
     })
 }
 
-#[derive(Clone, Debug)] // This Debug derive should be fine now
+#[derive(Clone, Debug)]
 struct AudioInputCallbackData {
     audio_chunk_sender: tokio::sync::mpsc::Sender<Vec<i16>>,
     app_state: Arc<ContinuousAudioAppState>,
