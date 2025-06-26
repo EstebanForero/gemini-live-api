@@ -14,10 +14,14 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 thiserror = "2.0.12"
 tokio = { version = "1.45.0", features = ["full"] }
-tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.26.2", features = [
+    "rustls-tls-native-roots",
+] }
 tracing = "0.1.41"
 url = "2.5.4"
 gemini-live-macros = "0.1.0"
+rubato = { version = "1.0.0-preview.0", optional = true }
+audioadapter = { version = "0.5.0", optional = true }
 
 [dev-dependencies]
 chrono = "0.4.41"
@@ -27,6 +31,12 @@ tokio = { version = "1.39.2", features = ["macros", "rt-multi-thread"] }
 dotenv = "0.15.0"
 cpal = "0.15.3"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rubato = "1.0.0-preview.0"                                               # Or the version your library uses
+audioadapter = "0.5.0"
+
+[features]
+default = []
+audio-resampling = ["dep:rubato", "dep:audioadapter"]
 
 # [[example]]
 # name = "basic_chat"

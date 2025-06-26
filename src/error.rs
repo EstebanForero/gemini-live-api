@@ -32,4 +32,10 @@ pub enum GeminiError {
 
     #[error("Missing API key")]
     MissingApiKey,
+
+    #[error("Audio resampling error: {0}")]
+    AudioResamplingError(String),
+
+    #[error("Internal client error: {0}")]
+    InternalError(String),
 }
